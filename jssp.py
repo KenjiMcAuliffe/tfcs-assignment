@@ -15,47 +15,58 @@ Seq = sequence; one possible ordering of all of the operations in a JSSP problem
 
 class JSSPSolver:
 
-    def __init__(self, ops: Seq):
-        self.ops = ops
+    def __init__(self, jobs: tuple[tuple[Op, ...], ...]):
+
+        self.jobs: tuple[tuple[Op, ...], ...] = jobs
+        self.n_jobs = sum(len(job) for job in jobs)
+        self.next_operation = [0 for _ in jobs]
+        self.best_schedule: Sched | None = None
+        self.best_makespan: Makespan | None = None
 
     def solve(self) -> tuple[Makespan, Sched] | None:
+        
+        self.solve_recurse([])
 
-        # 'permutations' generates all possible re-orderings of the operations
-        perms = permutations(self.ops)
+        # In the (impossible) case that no solution is found:
+        if self.best_schedule is None or self.best_makespan is None:
+            return None
 
-        best_makespan: Makespan | None = None
-        best_schedule: Sched | None = None
+        return (self.best_makespan, self.best_schedule)
 
-        for sequence in perms:
+    def solve_recurse(self, sequence):
+
+        # We have reached full depth in the state-space tree by constructing a full sequence.
+        # This is the recursive base case.
+        if len(sequence) == self.n_jobs:
 
             # The scheduler takes a sequence and finds optimal starting times for operation when placed in order of sequence.
-            scheduler = self.Scheduler(sequence)
+            scheduler = self.Scheduler(sequence, self)
             res = scheduler.generate_schedule()
 
             # If we beat the best solution so far, replace it
             if res is not None:
                 makespan, schedule = res
-                if best_makespan is None or makespan < best_makespan:
-                    best_makespan = makespan
-                    best_schedule = schedule
-
-        # In the (impossible) case that no solution is found:
-        if best_schedule is None or best_makespan is None:
-            return None
-
-        return (best_makespan, best_schedule)
+                if self.best_makespan is None or makespan < self.best_makespan:
+                    self.best_makespan = makespan
+                    self.best_schedule = schedule
+        else:
+            for job_idx, job in enumerate(self.jobs):
+                next_index = self.next_operation[job_idx]
+                if(next_index != len(job)):
+                    next_operation = job[next_index]
+                    sequence.append(next_operation)
+                    self.next_operation[job_idx] += 1
+                    self.solve_recurse(sequence)
+                    self.next_operation[job_idx] -= 1
+                    sequence.pop()
 
     # Iterate through a provided sequence, placing each operation into the schedule at the earliest position possible.
     class Scheduler:
 
-        def __init__(self, seq: Seq):
-            self.seq: Seq = seq
+        def __init__(self, seq: list[Op], solver: JSSPSolver):
+            self.seq: list[Op] = seq
             self.sched: Sched = {}
-            self.prev_ops: dict[Op, Op | None] = {}
-            self.ops_by_job_index = {
-                (op.job, op.index): op
-                for op in seq
-            }
+            self.solver: JSSPSolver = solver
 
         def generate_schedule(self) -> tuple[Makespan, Sched] | None:
 
@@ -74,17 +85,6 @@ class JSSPSolver:
             if(op.machine not in self.sched):
                 self.sched[op.machine] = {}
 
-            # Get the previous operation
-            prev = self.ops_by_job_index.get((op.job, op.index - 1))
-
-            if prev is not None:
-                # If the previous operation hasn't already been inserted to the schedule, abort.
-                if prev.machine not in self.sched or prev not in self.sched[prev.machine]:
-                    raise InvalidSequenceException(f"Failed inserting operation '{op}'. Previous operations not found.")
-                earliest_start = self.sched[prev.machine][prev] + prev.duration
-            else:
-                earliest_start = 0
-
             # Machine ops: Start times (so far) for each operation which shares a machine with the operation we are trying to insert.
             machine_ops = self.sched[op.machine]
 
@@ -92,13 +92,20 @@ class JSSPSolver:
             sorted_machine_ops = dict(sorted(machine_ops.items(), key=lambda item: item[1]))
 
             # See how far we need to move the operation forward until it doesn't overlap with any existing operations.
+            start_time = self.get_earliest_start(op)
             for o, s in sorted_machine_ops.items():
-                if earliest_start + op.duration <= s:
+                if start_time + op.duration <= s:
                     break
-                earliest_start = max(earliest_start, s + o.duration)
+                start_time = max(start_time, s + o.duration)
 
             # Update the start time for the operation
-            self.sched[op.machine][op] = earliest_start
+            self.sched[op.machine][op] = start_time
+
+        def get_earliest_start(self, op: Op) -> int:
+            if op.index == 0:
+                return 0
+            prev = self.solver.jobs[op.job][op.index - 1]
+            return self.sched[prev.machine][prev] + prev.duration
 
         # Calculate the end times of each operation and take the maximum
         def calculate_makespan(self) -> Makespan:
@@ -116,8 +123,8 @@ class Op:
     machine: int
     duration: int
 
-    def __repr__(self) -> str:
-        return f"(J{self.job}O{self.index})"
+    def __repr__(self):
+        return f"{self.job}{self.index}"
 
 Sched = dict[int, dict[Op, int]]
 
