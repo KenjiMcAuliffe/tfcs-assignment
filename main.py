@@ -15,6 +15,7 @@ def main():
 
     solver = JSSPSolver(ops)
     res = solver.solve()
+
     if res is None:
         print("No possible schedule found")
     else:

@@ -1,73 +1,113 @@
 from itertools import permutations
 from dataclasses import dataclass
 
+"""
+Terminology:
+
+Op = operation
+Ops = operations
+
+Sched = schedule; a mapping between operations and start times for each machine.
+
+Seq = sequence; one possible ordering of all of the operations in a JSSP problem instance.
+
+"""
+
 class JSSPSolver:
 
-    def __init__(self, ops: OpSeq):
+    def __init__(self, ops: Seq):
         self.ops = ops
 
-    def solve(self) -> tuple[int, Sched] | None:
-        sequences = permutations(self.ops)
+    def solve(self) -> tuple[Makespan, Sched] | None:
 
-        best_maketime: int | None = None
+        # 'permutations' generates all possible re-orderings of the operations
+        perms = permutations(self.ops)
+
+        best_makespan: Makespan | None = None
         best_schedule: Sched | None = None
 
-        for sequence in sequences:
-            scheduler = self.SeqScheduler(sequence)
+        for sequence in perms:
+
+            # The scheduler takes a sequence and finds optimal starting times for operation when placed in order of sequence.
+            scheduler = self.Scheduler(sequence)
             res = scheduler.generate_schedule()
+
+            # If we beat the best solution so far, replace it
             if res is not None:
-                maketime, schedule = res
-                if maketime is not None:
-                    if best_maketime is None or maketime < best_maketime:
-                        best_maketime = maketime
-                        best_schedule = schedule
-        if best_schedule is None or best_maketime is None:
+                makespan, schedule = res
+                if best_makespan is None or makespan < best_makespan:
+                    best_makespan = makespan
+                    best_schedule = schedule
+
+        # In the (impossible) case that no solution is found:
+        if best_schedule is None or best_makespan is None:
             return None
-        return (best_maketime, best_schedule)
 
-    class SeqScheduler:
-        def __init__(self, seq: OpSeq):
-            self.seq: OpSeq = seq
+        return (best_makespan, best_schedule)
+
+    # Iterate through a provided sequence, placing each operation into the schedule at the earliest position possible.
+    class Scheduler:
+
+        def __init__(self, seq: Seq):
+            self.seq: Seq = seq
             self.sched: Sched = {}
-            self.maketime: int | None = None
+            self.prev_ops: dict[Op, Op | None] = {}
+            self.ops_by_job_index = {
+                (op.job, op.index): op
+                for op in seq
+            }
 
-        def generate_schedule(self) -> tuple[int, Sched] | None:
+        def generate_schedule(self) -> tuple[Makespan, Sched] | None:
+
+            # Try to insert each operation into the schedule one-by-one, following the provided sequence.
             for operation in self.seq:
                 try:
                     self.insert_operation(operation)
-                except Exception as e:
-                    print(f"Discarding sequence. Reason: {e}")
+                except InvalidSequenceException:
                     return None
-            self.maketime = self.calculate_maketime()
-            return (self.maketime, self.sched)
+
+            return (self.calculate_makespan(), self.sched)
 
         def insert_operation(self, op: Op):
+            
+            # The schedule begins entirely empty - we must consider that a machine has not been encountered yet.
             if(op.machine not in self.sched):
                 self.sched[op.machine] = {}
-            deps = tuple(op2 for op2 in self.seq if op2.job == op.job and op2.index < op.index)
-            earliest_start = 0
 
-            for dep in deps:
-                if dep.machine not in self.sched or dep not in self.sched[dep.machine]:
-                    raise Exception(f"Failed inserting operation '{op}'. Dependencies not found.")
-                dep_end = self.sched[dep.machine][dep] + dep.duration
-                if earliest_start is None or dep_end > earliest_start:
-                    earliest_start = dep_end
+            # Get the previous operation
+            prev = self.ops_by_job_index.get((op.job, op.index - 1))
 
-            machine_ops = dict(sorted(self.sched[op.machine].items(), key=lambda item: item[1]))
+            if prev is not None:
+                # If the previous operation hasn't already been inserted to the schedule, abort.
+                if prev.machine not in self.sched or prev not in self.sched[prev.machine]:
+                    raise InvalidSequenceException(f"Failed inserting operation '{op}'. Previous operations not found.")
+                earliest_start = self.sched[prev.machine][prev] + prev.duration
+            else:
+                earliest_start = 0
 
-            start_time = earliest_start
-            for o, s in machine_ops.items():
-                if start_time + op.duration <= s:
+            # Machine ops: Start times (so far) for each operation which shares a machine with the operation we are trying to insert.
+            machine_ops = self.sched[op.machine]
+
+            # Machine ops sorted by start time (ascending).
+            sorted_machine_ops = dict(sorted(machine_ops.items(), key=lambda item: item[1]))
+
+            # See how far we need to move the operation forward until it doesn't overlap with any existing operations.
+            for o, s in sorted_machine_ops.items():
+                if earliest_start + op.duration <= s:
                     break
-                start_time = max(start_time, s + o.duration)
-            self.sched[op.machine][op] = start_time
+                earliest_start = max(earliest_start, s + o.duration)
 
-        def calculate_maketime(self):
-            return max(tuple(
-                max(tuple(s + o.duration for o, s in machine_sched.items()))
+            # Update the start time for the operation
+            self.sched[op.machine][op] = earliest_start
+
+        # Calculate the end times of each operation and take the maximum
+        def calculate_makespan(self) -> Makespan:
+
+            return max(
+                start + op.duration
                 for machine_sched in self.sched.values()
-            ))
+                for op, start in machine_sched.items()
+            )
 
 @dataclass(frozen=True)
 class Op:
@@ -81,5 +121,9 @@ class Op:
 
 Sched = dict[int, dict[Op, int]]
 
-OpSeq = tuple[Op, ...]
+Seq = tuple[Op, ...]
 
+Makespan = int
+
+class InvalidSequenceException(Exception):
+    pass
