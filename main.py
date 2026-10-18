@@ -4,6 +4,7 @@ from time import perf_counter
 def main():
 
     jobs = [
+        # Each operation is Operation(machine id, duration)
         [Operation(0, 3), Operation(1, 2), Operation(2, 2)],
         [Operation(0, 2), Operation(2, 1), Operation(1, 4)],
         [Operation(1, 4), Operation(2, 3)]
@@ -14,7 +15,7 @@ def main():
     schedule_exists = jssp_decision(jobs, K)
     finish = perf_counter()
     elapsed = finish - start
-    print(f"Elapsed: {elapsed} seconds")
+    print(f"Computation time elapsed: {elapsed} seconds")
 
     if schedule_exists:
         print(f"A schedule exists that has a makespan <= K={K}.")
